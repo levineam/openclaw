@@ -124,6 +124,29 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("completed successfully");
   });
 
+  it("labels gateway restart interruptions distinctly from failures", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-interrupted",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "error", error: "gateway closed (1006): gateway restarting" },
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("interrupted");
+    expect(msg).toContain("Resume hint:");
+    expect(msg).not.toContain("failed:");
+  });
+
   it("steers announcements into an active run when queue mode is steer", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);

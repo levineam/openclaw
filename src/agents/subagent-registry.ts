@@ -1,8 +1,10 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
+import { isTransientSubagentWaitError } from "./subagent-outcome.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
@@ -25,6 +27,9 @@ export type SubagentRunRecord = {
   archiveAtMs?: number;
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
+  waitRetryCount?: number;
+  waitRetryAt?: number;
+  lastWaitError?: string;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -43,6 +48,33 @@ function persistSubagentRuns() {
 }
 
 const resumedRuns = new Set<string>();
+
+const SUBAGENT_WAIT_RETRY_BASE_MS = 2_000;
+const SUBAGENT_WAIT_RETRY_MAX_MS = 10_000;
+const SUBAGENT_WAIT_RETRY_MAX_ATTEMPTS = 6;
+
+function computeSubagentWaitRetryDelayMs(attempt: number) {
+  const boundedAttempt = Math.max(0, Math.floor(attempt));
+  return Math.min(
+    SUBAGENT_WAIT_RETRY_MAX_MS,
+    SUBAGENT_WAIT_RETRY_BASE_MS * Math.pow(2, boundedAttempt),
+  );
+}
+
+function scheduleSubagentWaitRetry(
+  runId: string,
+  waitTimeoutMs: number,
+  attempt: number,
+  delayMs: number,
+) {
+  const timer = setTimeout(
+    () => {
+      void waitForSubagentCompletion(runId, waitTimeoutMs, attempt);
+    },
+    Math.max(1, Math.floor(delayMs)),
+  );
+  timer.unref?.();
+}
 
 function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) {
@@ -216,6 +248,9 @@ function ensureListener() {
     } else {
       entry.outcome = { status: "ok" };
     }
+    entry.waitRetryCount = 0;
+    entry.waitRetryAt = undefined;
+    entry.lastWaitError = undefined;
     persistSubagentRuns();
 
     if (!beginSubagentCleanup(evt.runId)) {
@@ -308,6 +343,9 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+    waitRetryCount: 0,
+    waitRetryAt: undefined,
+    lastWaitError: undefined,
   });
   ensureListener();
   persistSubagentRuns();
@@ -319,7 +357,7 @@ export function registerSubagentRun(params: {
   void waitForSubagentCompletion(params.runId, waitTimeoutMs);
 }
 
-async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
+async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number, attempt = 0) {
   try {
     const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
     const wait = await callGateway<{
@@ -358,6 +396,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     const waitError = typeof wait.error === "string" ? wait.error : undefined;
     entry.outcome =
       wait.status === "error" ? { status: "error", error: waitError } : { status: "ok" };
+    entry.waitRetryCount = 0;
+    entry.waitRetryAt = undefined;
+    entry.lastWaitError = undefined;
     mutated = true;
     if (mutated) {
       persistSubagentRuns();
@@ -383,8 +424,35 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     }).then((didAnnounce) => {
       finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
     });
-  } catch {
-    // ignore
+  } catch (err) {
+    const errorText = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    const entry = subagentRuns.get(runId);
+    if (!entry || entry.endedAt) {
+      return;
+    }
+
+    if (isTransientSubagentWaitError(errorText)) {
+      const nextAttempt = Math.max(0, Math.floor(attempt)) + 1;
+      entry.waitRetryCount = nextAttempt;
+      entry.lastWaitError = errorText;
+      if (nextAttempt <= SUBAGENT_WAIT_RETRY_MAX_ATTEMPTS) {
+        const delayMs = computeSubagentWaitRetryDelayMs(nextAttempt - 1);
+        entry.waitRetryAt = Date.now() + delayMs;
+        persistSubagentRuns();
+        scheduleSubagentWaitRetry(runId, waitTimeoutMs, nextAttempt, delayMs);
+        return;
+      }
+      entry.waitRetryAt = undefined;
+      persistSubagentRuns();
+      defaultRuntime.warn?.(
+        `subagent wait paused after ${SUBAGENT_WAIT_RETRY_MAX_ATTEMPTS} transient retries (runId=${runId})`,
+      );
+      return;
+    }
+
+    entry.lastWaitError = errorText;
+    entry.waitRetryAt = undefined;
+    persistSubagentRuns();
   }
 }
 

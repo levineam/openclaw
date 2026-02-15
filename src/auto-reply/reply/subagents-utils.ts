@@ -1,4 +1,5 @@
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import { classifySubagentOutcome } from "../../agents/subagent-outcome.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 export function formatDurationShort(valueMs?: number) {
@@ -53,10 +54,19 @@ export function formatRunLabel(entry: SubagentRunRecord, options?: { maxLength?:
 
 export function formatRunStatus(entry: SubagentRunRecord) {
   if (!entry.endedAt) {
-    return "running";
+    return entry.waitRetryCount && entry.waitRetryCount > 0 ? "waiting-reconnect" : "running";
   }
-  const status = entry.outcome?.status ?? "done";
-  return status === "ok" ? "done" : status;
+  const classified = classifySubagentOutcome(entry.outcome);
+  if (classified.kind === "ok") {
+    return "done";
+  }
+  if (classified.kind === "interrupted") {
+    return "interrupted";
+  }
+  if (classified.kind === "error") {
+    return "failed";
+  }
+  return classified.kind;
 }
 
 export function sortSubagentRuns(runs: SubagentRunRecord[]) {

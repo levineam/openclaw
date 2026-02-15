@@ -317,6 +317,10 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       `Cleanup: ${run.cleanup}`,
       run.archiveAtMs ? `Archive: ${formatTimestampWithAge(run.archiveAtMs)}` : undefined,
       run.cleanupHandled ? "Cleanup handled: yes" : undefined,
+      run.waitRetryCount && run.waitRetryCount > 0
+        ? `Wait retries: ${run.waitRetryCount}${run.waitRetryAt ? ` (next ${formatTimestampWithAge(run.waitRetryAt)})` : ""}`
+        : undefined,
+      run.lastWaitError ? `Last wait error: ${run.lastWaitError}` : undefined,
       `Outcome: ${outcome}`,
     ].filter(Boolean);
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
