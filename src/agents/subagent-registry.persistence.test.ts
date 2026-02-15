@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 
+const callGatewaySpy = vi.fn(async () => ({
+  status: "ok",
+  startedAt: 111,
+  endedAt: 222,
+}));
+
 vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async () => ({
-    status: "ok",
-    startedAt: 111,
-    endedAt: 222,
-  })),
+  callGateway: (...args: unknown[]) => callGatewaySpy(...args),
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -28,6 +30,12 @@ describe("subagent registry persistence", () => {
 
   afterEach(async () => {
     announceSpy.mockClear();
+    callGatewaySpy.mockReset();
+    callGatewaySpy.mockResolvedValue({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
     vi.resetModules();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true });
@@ -229,5 +237,45 @@ describe("subagent registry persistence", () => {
       runs: Record<string, { cleanupCompletedAt?: number }>;
     };
     expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeDefined();
+  });
+
+  it("retries transient agent.wait gateway-close errors", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    let waitCalls = 0;
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string };
+      if (typed.method === "agent.wait") {
+        waitCalls += 1;
+        if (waitCalls === 1) {
+          throw new Error("gateway closed (1006): gateway restarting");
+        }
+        return { status: "ok", startedAt: 111, endedAt: 222 };
+      }
+      return {};
+    });
+
+    vi.useFakeTimers();
+    vi.resetModules();
+    const mod = await import("./subagent-registry.js");
+    mod.registerSubagentRun({
+      runId: "run-retry",
+      childSessionKey: "agent:main:subagent:retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry transient wait",
+      cleanup: "keep",
+    });
+
+    await Promise.resolve();
+    expect(waitCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    await Promise.resolve();
+
+    expect(waitCalls).toBe(2);
+    expect(announceSpy).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

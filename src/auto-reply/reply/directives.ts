@@ -1,9 +1,10 @@
-import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
+import type { NoticeLevel, ReasoningLevel, ReasoningEffortLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
   normalizeElevatedLevel,
   normalizeNoticeLevel,
   normalizeReasoningLevel,
+  normalizeReasoningEffort,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   type ThinkLevel,
@@ -189,5 +190,64 @@ export function extractStatusDirective(body?: string): {
   return extractSimpleDirective(body, ["status"]);
 }
 
-export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
+// Reasoning effort (compute) for providers that support it (e.g., OpenAI Codex)
+export function extractReasoningEffortDirective(body?: string): {
+  cleaned: string;
+  reasoningEffort?: ReasoningEffortLevel;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
+  const extracted = extractLevelDirective(
+    body,
+    ["effort", "reasoning-effort", "reasoning_effort", "re"],
+    normalizeReasoningEffort,
+  );
+  if (extracted.hasDirective) {
+    return {
+      cleaned: extracted.cleaned,
+      reasoningEffort: extracted.level,
+      rawLevel: extracted.rawLevel,
+      hasDirective: extracted.hasDirective,
+    };
+  }
+  // Plain-English forms: "reasoning high", "high reasoning", "reasoning effort high"
+  const forward = body.match(
+    /\b(reasoning(?:\s+effort)?|effort)\s*(?:=|:|is|set to|to)?\s*(none|low|medium|high|x-?high|max(?:imum)?|extreme)\b/i,
+  );
+  const reverse = body.match(
+    /\b(none|low|medium|high|x-?high|max(?:imum)?|extreme)\s+reasoning(?:\s+effort)?\b/i,
+  );
+  const match = forward || reverse;
+  if (!match || match.index === undefined) {
+    return { cleaned: body.trim(), hasDirective: false };
+  }
+  const rawLevel = (forward ? match[2] : match[1]) ?? undefined;
+  const level = normalizeReasoningEffort(rawLevel);
+  const start = match.index;
+  const end = start + match[0].length;
+  const cleaned = body
+    .slice(0, start)
+    .concat(" ")
+    .concat(body.slice(end))
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    cleaned,
+    reasoningEffort: level,
+    rawLevel,
+    hasDirective: true,
+  };
+}
+
+export type {
+  ElevatedLevel,
+  NoticeLevel,
+  ReasoningLevel,
+  ReasoningEffortLevel,
+  ThinkLevel,
+  VerboseLevel,
+};
 export { extractExecDirective } from "./exec/directive.js";

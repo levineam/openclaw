@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -19,6 +19,7 @@ import {
 } from "../utils/delivery-context.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import { classifySubagentOutcome, type SubagentOutcomeLike } from "./subagent-outcome.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
 function formatDurationShort(valueMs?: number) {
@@ -241,8 +242,9 @@ async function buildSubagentStatsLine(params: {
   });
 
   const sessionId = entry?.sessionId;
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const transcriptPath =
-    sessionId && storePath ? path.join(path.dirname(storePath), `${sessionId}.jsonl`) : undefined;
+    sessionId && storePath ? resolveSessionFilePath(sessionId, entry, { agentId }) : undefined;
 
   const input = entry?.inputTokens;
   const output = entry?.outputTokens;
@@ -280,6 +282,9 @@ async function buildSubagentStatsLine(params: {
   parts.push(`sessionKey ${params.sessionKey}`);
   if (sessionId) {
     parts.push(`sessionId ${sessionId}`);
+  }
+  if (storePath) {
+    parts.push(`store ${storePath}`);
   }
   if (transcriptPath) {
     parts.push(`transcript ${transcriptPath}`);
@@ -340,10 +345,7 @@ export function buildSubagentSystemPrompt(params: {
   return lines.join("\n");
 }
 
-export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
-  error?: string;
-};
+export type SubagentRunOutcome = SubagentOutcomeLike;
 
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
@@ -402,12 +404,16 @@ export async function runSubagentAnnounceFlow(params: {
       }
       reply = await readLatestAssistantReply({
         sessionKey: params.childSessionKey,
+        waitForOutputMs: 4_000,
+        pollIntervalMs: 400,
       });
     }
 
     if (!reply) {
       reply = await readLatestAssistantReply({
         sessionKey: params.childSessionKey,
+        waitForOutputMs: 2_000,
+        pollIntervalMs: 400,
       });
     }
 
@@ -422,30 +428,26 @@ export async function runSubagentAnnounceFlow(params: {
       endedAt: params.endedAt,
     });
 
-    // Build status label
-    const statusLabel =
-      outcome.status === "ok"
-        ? "completed successfully"
-        : outcome.status === "timeout"
-          ? "timed out"
-          : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
+    const classifiedOutcome = classifySubagentOutcome(outcome);
 
     // Build instructional message for main agent
     const taskLabel = params.label || params.task || "background task";
     const triggerMessage = [
-      `A background task "${taskLabel}" just ${statusLabel}.`,
+      `A background task "${taskLabel}" just ${classifiedOutcome.statusLabel}.`,
       "",
       "Findings:",
       reply || "(no output)",
       "",
       statsLine,
+      classifiedOutcome.resumeHint ? "" : undefined,
+      classifiedOutcome.resumeHint ? `Resume hint: ${classifiedOutcome.resumeHint}` : undefined,
       "",
       "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
       "Do not mention technical details like tokens, stats, or that this was a background task.",
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
-    ].join("\n");
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n");
 
     const queued = await maybeQueueSubagentAnnounce({
       requesterSessionKey: params.requesterSessionKey,

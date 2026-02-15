@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sleep } from "../utils.ts";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -60,6 +61,16 @@ describe("openclaw-tools: subagents", () => {
           ],
         };
       }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "child result" }],
+            },
+          ],
+        };
+      }
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
@@ -82,7 +93,12 @@ describe("openclaw-tools: subagents", () => {
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string; timeoutMs?: number } | undefined;
         waitCalls.push(params ?? {});
-        return { runId: params?.runId ?? "run-1", status: "ok", startedAt: 1000, endedAt: 2000 };
+        return {
+          runId: params?.runId ?? "run-1",
+          status: "ok",
+          startedAt: 1000,
+          endedAt: 2000,
+        };
       }
       if (request.method === "sessions.patch") {
         const params = request.params as { key?: string; label?: string } | undefined;
@@ -126,9 +142,9 @@ describe("openclaw-tools: subagents", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await sleep(0);
+    await sleep(0);
+    await sleep(0);
 
     const childWait = waitCalls.find((call) => call.runId === childRunId);
     expect(childWait?.timeoutMs).toBe(1000);

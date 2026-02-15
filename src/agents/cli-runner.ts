@@ -42,6 +42,7 @@ export async function runCliAgent(params: {
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
+  configOverrides?: string[];
   timeoutMs: number;
   runId: string;
   extraSystemPrompt?: string;
@@ -157,6 +158,7 @@ export async function runCliAgent(params: {
     imagePaths,
     promptArg: argsPrompt,
     useResume,
+    configOverrides: params.configOverrides,
   });
 
   const serialize = backend.serialize ?? true;

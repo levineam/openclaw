@@ -385,6 +385,7 @@ export async function runPreparedReply(
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
+      modelReasoningEffort: sessionEntry?.modelReasoningEffort,
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,
       bashElevated: {

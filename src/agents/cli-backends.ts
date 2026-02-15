@@ -67,6 +67,7 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   resumeOutput: "text",
   input: "arg",
   modelArg: "--model",
+  configArg: "-c",
   sessionIdFields: ["thread_id"],
   sessionMode: "existing",
   imageArg: "--image",
