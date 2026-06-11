@@ -215,6 +215,15 @@ export class GatewayPlugin extends Plugin {
         if (this.intentionalDisconnect || isNormalGatewayCloseCode(closeCode)) {
           return;
         }
+        // Reconnect was disabled even though no intentional disconnect happened
+        // and the close is abnormal. This state has been observed on live
+        // gateways (lane silently dead until manual restart) but its owning
+        // transition has not been identified yet, so re-arm reconnect and log
+        // loudly enough that production occurrences can be traced back.
+        this.emitter.emit(
+          "debug",
+          `Gateway reconnect was disabled at abnormal close ${code} without an intentional disconnect; re-arming reconnect`,
+        );
         this.shouldReconnect = true;
       }
       if (isFatalGatewayCloseCode(closeCode)) {
