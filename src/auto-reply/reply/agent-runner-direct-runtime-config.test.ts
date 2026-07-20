@@ -603,6 +603,7 @@ describe("runReplyAgent runtime config", () => {
       shouldFollowup: true,
       isActive: true,
     });
+    enqueueFollowupRunMock.mockReturnValue(true);
 
     await expect(runReplyAgent(replyParams)).resolves.toEqual({
       text: "I'm still working on the previous request, so I queued this follow-up.",

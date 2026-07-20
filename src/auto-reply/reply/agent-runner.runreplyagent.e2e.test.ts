@@ -458,7 +458,9 @@ describe("runReplyAgent active steering", () => {
       },
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toEqual({
+      text: "I'm still working on the current request and added this message to that run.",
+    });
 
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
